@@ -1,14 +1,14 @@
 import json
 import time
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional
 from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 
 # Configuration
-KEYWORDS = ["Software Reliability Growth", "Software Reliability Growth Models", "SRGM"]
+KEYWORDS = ["Software Reliability Growth", "Software Reliability Growth Models", "Software Reliability"]
 NUM_RESULTS = 30  # Number of search results to fetch (DuckDuckGo limit ~30)
 DELAY_SECONDS = 1  # Rate limiting between requests
 OUTPUT_FILE = "scraped_data.json"
@@ -19,20 +19,23 @@ def search_urls(keywords: List[str], num_results: int = 10) -> List[str]:
     Returns a list of unique URLs.
     """
     ddg = DDGS()
-    all_urls = set()
+    seen = set()
+    urls: List[str] = []
     
     # Search for each keyword separately and combine
     for keyword in keywords:
         try:
             results = ddg.text(keyword, max_results=num_results)
             for result in results:
-                all_urls.add(result['href'])
+                href = result.get('href')
+                if href and href not in seen:
+                    seen.add(href)
+                    urls.append(href)
         except Exception as e:
             print(f"Error searching for '{keyword}': {e}")
     
-    unique_urls = list(all_urls)[:num_results]  # Cap to avoid overload
-    print(f"Found {len(unique_urls)} unique URLs.")
-    return unique_urls
+    print(f"Found {len(urls)} unique URLs.")
+    return urls[:num_results]  # Cap to avoid overload
 
 def clean_text(text: str) -> str:
     """
@@ -70,7 +73,7 @@ def ensure_body_has_words(soup: BeautifulSoup, text: str) -> str:
 
     return "No meaningful body text found."
 
-def scrape_page(url: str, delay: int = 1) -> Dict[str, str]:
+def scrape_page(url: str, delay: int = 1) -> Optional[Dict[str, str]]:
     """
     Fetch and scrape a single page: title, meta description, and main body text.
     Returns a dict with extracted data or error message.
@@ -109,7 +112,8 @@ def scrape_page(url: str, delay: int = 1) -> Dict[str, str]:
         }
     
     except requests.RequestException as e:
-        return {'url': url, 'error': str(e)}
+        print(f"Request error for {url}: {e}")
+        return None
 
 def main():
     """
@@ -117,15 +121,33 @@ def main():
     """
     print("Starting scraper for Software Reliability Growth keywords...")
     
-    # Step 1: Search for URLs
     urls = search_urls(KEYWORDS, NUM_RESULTS)
-    
-    # Step 2: Scrape each URL
     scraped_data = []
-    for i, url in enumerate(urls, 1):
-        print(f"Scraping {i}/{len(urls)}: {url}")
-        data = scrape_page(url)
-        scraped_data.append(data)
+    attempted = set()
+    url_index = 0
+    
+    while len(scraped_data) < NUM_RESULTS:
+        if url_index >= len(urls):
+            extra_candidates = search_urls(KEYWORDS, NUM_RESULTS * 2)
+            new_urls = [u for u in extra_candidates if u not in attempted]
+            if not new_urls:
+                print("No additional URLs available to retry.")
+                break
+            urls.extend(new_urls)
+            continue
+        
+        url = urls[url_index]
+        url_index += 1
+        if url in attempted:
+            continue
+        attempted.add(url)
+        
+        print(f"Scraping {len(scraped_data) + 1}/{NUM_RESULTS}: {url}")
+        data = scrape_page(url, DELAY_SECONDS)
+        if data:
+            scraped_data.append(data)
+        else:
+            print(f"Scrape failed for {url}. Trying a different URL.")
     
     # Step 3: Save to JSON
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
