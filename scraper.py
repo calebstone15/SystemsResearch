@@ -135,31 +135,45 @@ def scrape_page(url: str, delay: int = 1) -> Optional[Dict[str, str]]:
         return None
 
 
-def process_scraping_queue(urls: List[str]) -> List[Dict[str, str]]:
+def fetch_more_urls(attempted: set, keywords: List[str], batch_size: int) -> List[str]:
+    """
+    Fetch more URLs if needed.
+    """
+    extra_candidates = search_urls(keywords, batch_size)
+    return [u for u in extra_candidates if u not in attempted]
+
+
+def process_scraping_queue(
+    urls: List[str],
+    target_results: int = NUM_RESULTS,
+    keywords: List[str] = None
+) -> List[Dict[str, str]]:
     """
     Process the list of URLs and scrape data until the target number of results is reached.
     """
+    if keywords is None:
+        keywords = KEYWORDS
+
     scraped_data = []
     attempted = set()
-    url_index = 0
+    url_queue = urls[:]  # Make a copy to act as a queue
 
-    while len(scraped_data) < NUM_RESULTS:
-        if url_index >= len(urls):
-            extra_candidates = search_urls(KEYWORDS, NUM_RESULTS * 2)
-            new_urls = [u for u in extra_candidates if u not in attempted]
+    while len(scraped_data) < target_results:
+        if not url_queue:
+            # Fetch more URLs if queue is empty
+            new_urls = fetch_more_urls(attempted, keywords, target_results * 2)
             if not new_urls:
                 print("No additional URLs available to retry.")
                 break
-            urls.extend(new_urls)
+            url_queue.extend(new_urls)
             continue
 
-        url = urls[url_index]
-        url_index += 1
+        url = url_queue.pop(0)
         if url in attempted:
             continue
         attempted.add(url)
 
-        print(f"Scraping {len(scraped_data) + 1}/{NUM_RESULTS}: {url}")
+        print(f"Scraping {len(scraped_data) + 1}/{target_results}: {url}")
         data = scrape_page(url, DELAY_SECONDS)
         if data:
             scraped_data.append(data)
@@ -175,8 +189,8 @@ def main():
     """
     print("Starting scraper for Software Reliability Growth keywords...")
 
-    urls = search_urls(KEYWORDS, NUM_RESULTS)
-    scraped_data = process_scraping_queue(urls)
+    initial_urls = search_urls(KEYWORDS, NUM_RESULTS)
+    scraped_data = process_scraping_queue(initial_urls, NUM_RESULTS, KEYWORDS)
 
     # Step 3: Save to JSON
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
