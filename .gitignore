@@ -6,3 +6,4 @@ FlightRecords/
 FlightRecordsdjifly/
 DJIFlightRecord*
 dji-log*
+__pycache__/
