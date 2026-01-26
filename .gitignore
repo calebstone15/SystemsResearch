@@ -1,0 +1,8 @@
+*.csv
+*.txt
+*.DAT
+*.dat
+FlightRecords/
+FlightRecordsdjifly/
+DJIFlightRecord*
+dji-log*

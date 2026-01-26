@@ -1,0 +1,41 @@
+import pandas as pd
+import os
+
+source_dir = "Data/Drone Logs/Raw CSVs"
+clean_dir = "Data/Drone Logs/Clean CSVs"
+
+DURATION_COLUMN = "OSD.flyTime"
+
+os.makedirs(clean_dir)
+
+seenflights = set()
+
+for filename in os.listdir(source_dir):
+    if filename.endswith(".csv"):
+        try:
+            file_path = os.path.join(source_dir, filename)
+        
+            df = pd.read_csv(file_path, low_memory=False)
+
+            if DURATION_COLUMN not in df.columns:
+                print(f"Missing {DURATION_COLUMN} column in {filename}")
+                continue
+            
+            duration = df[DURATION_COLUMN].max() - df[DURATION_COLUMN].min()
+            if duration < 60:
+                print(f"Duration is less than 1 minute in {filename}")
+                continue
+            rowcount = len(df)
+            flightid = (rowcount, duration)
+            if flightid in seenflights:
+                print(f"Duplicate flight in {filename}")
+                continue
+            seenflights.add(flightid)
+
+            df.to_csv(os.path.join(clean_dir, filename), index=False)
+            print(f"Processed {filename}")
+
+        except Exception as e:
+            print(f"Error processing {filename}: {e}")
+
+            
