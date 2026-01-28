@@ -4,7 +4,7 @@ Scraper module to fetch and analyze web pages related to Software Reliability Gr
 import json
 import time
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 import requests
 from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
@@ -21,6 +21,22 @@ OUTPUT_FILE = "scraped_data.json"
 WORD_PATTERN = re.compile(r'\b\w+\b')
 
 
+def search_keyword(ddg: DDGS, keyword: str, num_results: int) -> List[str]:
+    """
+    Search for a single keyword and return a list of URLs.
+    """
+    urls = []
+    try:
+        results = ddg.text(keyword, max_results=num_results)
+        for result in results:
+            href = result.get('href')
+            if href:
+                urls.append(href)
+    except Exception as e: # pylint: disable=broad-exception-caught
+        print(f"Error searching for '{keyword}': {e}")
+    return urls
+
+
 def search_urls(keywords: List[str], num_results: int = 10) -> List[str]:
     """
     Search DuckDuckGo for URLs matching any keyword.
@@ -32,15 +48,11 @@ def search_urls(keywords: List[str], num_results: int = 10) -> List[str]:
 
     # Search for each keyword separately and combine
     for keyword in keywords:
-        try:
-            results = ddg.text(keyword, max_results=num_results)
-            for result in results:
-                href = result.get('href')
-                if href and href not in seen:
-                    seen.add(href)
-                    urls.append(href)
-        except Exception as e: # pylint: disable=broad-exception-caught
-            print(f"Error searching for '{keyword}': {e}")
+        keyword_urls = search_keyword(ddg, keyword, num_results)
+        for href in keyword_urls:
+            if href not in seen:
+                seen.add(href)
+                urls.append(href)
 
     print(f"Found {len(urls)} unique URLs.")
     return urls[:num_results]  # Cap to avoid overload
@@ -135,6 +147,15 @@ def scrape_page(url: str, delay: int = 1) -> Optional[Dict[str, str]]:
         return None
 
 
+def fetch_more_urls(attempted: Set[str]) -> List[str]:
+    """
+    Fetch more URLs if the current list is exhausted.
+    """
+    extra_candidates = search_urls(KEYWORDS, NUM_RESULTS * 2)
+    new_urls = [u for u in extra_candidates if u not in attempted]
+    return new_urls
+
+
 def process_scraping_queue(urls: List[str]) -> List[Dict[str, str]]:
     """
     Process the list of URLs and scrape data until the target number of results is reached.
@@ -145,8 +166,7 @@ def process_scraping_queue(urls: List[str]) -> List[Dict[str, str]]:
 
     while len(scraped_data) < NUM_RESULTS:
         if url_index >= len(urls):
-            extra_candidates = search_urls(KEYWORDS, NUM_RESULTS * 2)
-            new_urls = [u for u in extra_candidates if u not in attempted]
+            new_urls = fetch_more_urls(attempted)
             if not new_urls:
                 print("No additional URLs available to retry.")
                 break
