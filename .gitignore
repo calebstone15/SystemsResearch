@@ -7,3 +7,5 @@ FlightRecordsdjifly/
 DJIFlightRecord*
 dji-log*
 __pycache__/
+*.py
+*.ipynb
