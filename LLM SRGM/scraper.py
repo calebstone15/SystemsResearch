@@ -4,10 +4,14 @@ Scraper module to fetch and analyze web pages related to Software Reliability Gr
 import json
 import time
 import re
-from typing import List, Dict, Optional
+import logging
+from typing import List, Dict, Optional, Set
 import requests
 from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Configuration
 KEYWORDS = [
@@ -17,8 +21,24 @@ KEYWORDS = [
 ]
 NUM_RESULTS = 30  # Number of search results to fetch (DuckDuckGo limit ~30)
 DELAY_SECONDS = 1  # Rate limiting between requests
+TIMEOUT_SECONDS = 10
 OUTPUT_FILE = "scraped_data.json"
 WORD_PATTERN = re.compile(r'\b\w+\b')
+
+
+def _search_keyword(ddg: DDGS, keyword: str, num_results: int, seen: Set[str], urls: List[str]):
+    """
+    Search for a single keyword and update the seen set and urls list.
+    """
+    try:
+        results = ddg.text(keyword, max_results=num_results)
+        for result in results:
+            href = result.get('href')
+            if href and href not in seen:
+                seen.add(href)
+                urls.append(href)
+    except Exception as e: # pylint: disable=broad-exception-caught
+        logging.error("Error searching for '%s': %s", keyword, e)
 
 
 def search_urls(keywords: List[str], num_results: int = 10) -> List[str]:
@@ -32,17 +52,9 @@ def search_urls(keywords: List[str], num_results: int = 10) -> List[str]:
 
     # Search for each keyword separately and combine
     for keyword in keywords:
-        try:
-            results = ddg.text(keyword, max_results=num_results)
-            for result in results:
-                href = result.get('href')
-                if href and href not in seen:
-                    seen.add(href)
-                    urls.append(href)
-        except Exception as e: # pylint: disable=broad-exception-caught
-            print(f"Error searching for '{keyword}': {e}")
+        _search_keyword(ddg, keyword, num_results, seen, urls)
 
-    print(f"Found {len(urls)} unique URLs.")
+    logging.info("Found %d unique URLs.", len(urls))
     return urls[:num_results]  # Cap to avoid overload
 
 
@@ -101,7 +113,7 @@ def scrape_page(url: str, delay: int = 1) -> Optional[Dict[str, str]]:
     }
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=TIMEOUT_SECONDS)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -131,8 +143,28 @@ def scrape_page(url: str, delay: int = 1) -> Optional[Dict[str, str]]:
         }
 
     except requests.RequestException as e:
-        print(f"Request error for {url}: {e}")
+        logging.warning("Request error for %s: %s", url, e)
         return None
+
+
+def _fetch_additional_urls(
+        current_urls: List[str],
+        attempted: Set[str],
+        keywords: List[str],
+        count: int
+    ) -> bool:
+    """
+    Fetch more URLs and add them to the list if they haven't been attempted.
+    Returns True if new URLs were added, False otherwise.
+    """
+    extra_candidates = search_urls(keywords, count)
+    new_urls = [u for u in extra_candidates if u not in attempted]
+
+    if not new_urls:
+        return False
+
+    current_urls.extend(new_urls)
+    return True
 
 
 def process_scraping_queue(urls: List[str]) -> List[Dict[str, str]]:
@@ -144,27 +176,28 @@ def process_scraping_queue(urls: List[str]) -> List[Dict[str, str]]:
     url_index = 0
 
     while len(scraped_data) < NUM_RESULTS:
+        # If we ran out of URLs, try to fetch more
         if url_index >= len(urls):
-            extra_candidates = search_urls(KEYWORDS, NUM_RESULTS * 2)
-            new_urls = [u for u in extra_candidates if u not in attempted]
-            if not new_urls:
-                print("No additional URLs available to retry.")
+            added_more = _fetch_additional_urls(urls, attempted, KEYWORDS, NUM_RESULTS * 2)
+            if not added_more:
+                logging.info("No additional URLs available to retry.")
                 break
-            urls.extend(new_urls)
             continue
 
         url = urls[url_index]
         url_index += 1
+
         if url in attempted:
             continue
         attempted.add(url)
 
-        print(f"Scraping {len(scraped_data) + 1}/{NUM_RESULTS}: {url}")
+        logging.info("Scraping %d/%d: %s", len(scraped_data) + 1, NUM_RESULTS, url)
         data = scrape_page(url, DELAY_SECONDS)
+
         if data:
             scraped_data.append(data)
         else:
-            print(f"Scrape failed for {url}. Trying a different URL.")
+            logging.warning("Scrape failed for %s. Trying a different URL.", url)
 
     return scraped_data
 
@@ -173,7 +206,7 @@ def main():
     """
     Main function: Search, scrape, and save data.
     """
-    print("Starting scraper for Software Reliability Growth keywords...")
+    logging.info("Starting scraper for Software Reliability Growth keywords...")
 
     urls = search_urls(KEYWORDS, NUM_RESULTS)
     scraped_data = process_scraping_queue(urls)
@@ -182,8 +215,8 @@ def main():
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         json.dump(scraped_data, f, indent=2, ensure_ascii=False)
 
-    print(f"Scraping complete! Data saved to {OUTPUT_FILE}")
-    print(f"Total entries: {len(scraped_data)}")
+    logging.info("Scraping complete! Data saved to %s", OUTPUT_FILE)
+    logging.info("Total entries: %d", len(scraped_data))
 
 
 if __name__ == "__main__":
